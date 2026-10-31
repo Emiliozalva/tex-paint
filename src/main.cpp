@@ -173,32 +173,44 @@ void drawImGui(Window &window) {
 }
 
 
-void pinta(double s, double t, float esc=1.0){
+void pinta(double s, double t, float esc=1.0) {
 	int ancho = image.GetWidth();
 	int alto = image.GetHeight();
 	float radius1 = esc * radius;
 	
-	int limite = static_cast<int>(radius1);
-	for (double i = -limite; i <= limite; i++) {
-		for (double j = -limite; j <= limite; j++) {
+	// Hacemos que el borde de antialiasing sea proporcional al radio (ej. 25% extra del radio, mínimo 1.5 px)
+	// Así cuando el radio es grande, el difuminado es bien notorio
+	float ancho_aa = std::max(1.5f, radius1 * 0.25f);
+	float radio_total = radius1 + ancho_aa;
+	
+	int limite = static_cast<int>(std::ceil(radio_total));
+	
+	for (int i = -limite; i <= limite; i++) {
+		for (int j = -limite; j <= limite; j++) {
 			double dist = std::sqrt(i*i + j*j);
 			
-		
-			if (dist <= radius1) {
-		
-				double coordx = s + i;
-				double coordy = t + j;
+			if (dist <= radio_total) {
+				int coordx = static_cast<int>(std::round(s)) + i;
+				int coordy = static_cast<int>(std::round(t)) + j;
 				
 				if (coordx >= 0 && coordx < ancho && coordy >= 0 && coordy < alto) {
 					
-					glm::vec4 color_fondo = image.GetRGBA(coordy, coordx);
-					glm::vec4 color_nuevo; 
-					/// colormezclado =canal alfa*color + (1-alpha)*colr_fondo
+					// 1.0 adentro del radio, y cae de 1.0 a 0.0 entre radius1 y radio_total
+					float factor_borde = 1.0f;
+					if (dist > radius1) {
+						factor_borde = static_cast<float>((radio_total - dist) / ancho_aa);
+						factor_borde = std::max(0.0f, std::min(factor_borde, 1.0f));
+					}
 					
-					color_nuevo[0] = (color[3]* color[0]) + ((1.f - color[3]) * color_fondo[0]);
-					color_nuevo[1] = (color[3]* color[1]) + ((1.f - color[3]) * color_fondo[1]);
-					color_nuevo[2] = (color[3] * color[2]) + ((1.f - color[3]) * color_fondo[2]);
-					color_nuevo[3] = color[3]+ ((1.f - color[3]) * color_fondo[3]);
+					float alpha_efectivo = color[3] * factor_borde;
+					
+					glm::vec4 color_fondo = image.GetRGBA(coordy, coordx);
+					glm::vec4 color_nuevo;
+					
+					color_nuevo[0] = (alpha_efectivo * color[0]) + ((1.f - alpha_efectivo) * color_fondo[0]);
+					color_nuevo[1] = (alpha_efectivo * color[1]) + ((1.f - alpha_efectivo) * color_fondo[1]);
+					color_nuevo[2] = (alpha_efectivo * color[2]) + ((1.f - alpha_efectivo) * color_fondo[2]);
+					color_nuevo[3] = alpha_efectivo + ((1.f - alpha_efectivo) * color_fondo[3]);
 					
 					image.SetRGBA(coordy, coordx, color_nuevo);
 				}
@@ -208,35 +220,33 @@ void pinta(double s, double t, float esc=1.0){
 }
 	// ===== callbacks de la ventana auxiliar (textura) =====
 	double ult_s,ult_t;
+	bool hay_punto_previo = false;
 	
 	void auxMouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
 		if (ImGui::GetIO().WantCaptureMouse) return;
-		if (action==GLFW_PRESS) {
+		if (action == GLFW_PRESS) {
 			mouse_action = MouseAction::Draw;
 			
 			double xpos, ypos; 
 			glfwGetCursorPos(window, &xpos, &ypos); 
-			std::cout <<xpos <<"   "<<ypos<<endl;
 			BufferSize bs = getBufferSize(window); 
 			
-			double s = (xpos * image.GetWidth())/bs.width;
-			double t = ((bs.height-ypos) * image.GetHeight())/(bs.height); 
+			double s = (xpos * image.GetWidth()) / bs.width;
+			double t = ((bs.height - ypos) * image.GetHeight()) / bs.height; 
 			ult_s = s;
 			ult_t = t; 
+			hay_punto_previo = true;
 			
-			pinta(s,t);
+			pinta(s, t);
 			texture.update(image);
-			// actualizar textura
-			/// @ToDo: Parte 1: pintar un punto de radio "radius" en la imagen
-			///                 "image" que se usa como textura
-			
 		} else {
 			mouse_action = MouseAction::None;
+			hay_punto_previo = false;
 		}
 	}
 	
 	void auxMouseMoveCallback(GLFWwindow* window, double xpos, double ypos) {
-		if (mouse_action!=MouseAction::Draw) return;
+		if (mouse_action != MouseAction::Draw) return;
 		
 		int ancho = image.GetWidth();
 		int alto = image.GetHeight(); 
@@ -244,41 +254,27 @@ void pinta(double s, double t, float esc=1.0){
 		
 		double s = (xpos * ancho) / bs.width;
 		double t = ((bs.height - ypos) * alto) / bs.height;
-		//	cout<<"Punto("<<s<<","<<t<<")"<<endl;
+		
 		double dx = s - ult_s;
 		double dy = t - ult_t;
-		double distancia = std::sqrt(dx*dx + dy*dy);
-		double espaciado = std::max(1.0, radius * 0.5); 
-		int relleno = static_cast<int>(distancia/espaciado)+ 1; 
-		//	cout<<dx<<"  "<<dy<<"  "<<distancia<<"  "<<relleno<<endl;
-		//	int s_aux = ult_s; 
-		//	int t_aux= ult_t;
+		double distancia = std::sqrt(dx * dx + dy * dy);
 		
-		for(int i = 1; i <= relleno; ++i) {
-			double fraccion = static_cast<double>(i)/relleno;
-			double s_paso = ult_s + dx*fraccion;
-			double t_paso = ult_t +dy *fraccion;
-			//		if((s_aux != static_cast<int>(s_paso) && t_aux != static_cast<int>(t_paso))){
-			//			pinta(s_paso,t_paso);
-			//			s_aux = static_cast<int>(s_paso);
-			//			t_aux = static_cast<int>(t_paso);
-			//		}else{
-			//			
-			//			s_aux = static_cast<int>(s_paso);
-			//			t_aux = static_cast<int>(t_paso);
-			//		}
-			//		cout<<"paso en x "<<s_paso<<"  paso en y "<<t_paso<<endl<<"----"<<endl;
-			pinta(s_paso,t_paso);
+		double espaciado = std::max(1.0, radius * 0.4); 
+		if (distancia < espaciado) return;
+		
+		int relleno = static_cast<int>(distancia / espaciado); 
+		
+		for (int i = 1; i <= relleno; ++i) {
+			double fraccion = static_cast<double>(i) / relleno;
+			double s_paso = ult_s + dx * fraccion;
+			double t_paso = ult_t + dy * fraccion;
+			pinta(s_paso, t_paso);
 		}
+		
+		// Actualizamos exactamente hasta donde llegó el último círculo pintado
 		ult_s = s;
 		ult_t = t;
 		texture.update(image);
-		
-		
-		
-		/// @ToDo: Parte 1: pintar un segmento de ancho "2*radius" en la imagen
-		///                 "image" que se usa como textura
-		
 	}
 	
 	
@@ -286,8 +282,8 @@ void pinta(double s, double t, float esc=1.0){
 	
 	void mainMouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
 		if (ImGui::GetIO().WantCaptureMouse) return;
-		if (action==GLFW_PRESS) {
-			if (mods!=0 or button==GLFW_MOUSE_BUTTON_RIGHT) {
+		if (action == GLFW_PRESS) {
+			if (mods != 0 or button == GLFW_MOUSE_BUTTON_RIGHT) {
 				mouse_action = MouseAction::ManipulateView;
 				common_callbacks::mouseButtonCallback(window, GLFW_MOUSE_BUTTON_LEFT, action, mods);
 				return;
@@ -301,64 +297,90 @@ void pinta(double s, double t, float esc=1.0){
 			drawBack(); 
 			
 			float pixel[4]; 
-			glReadPixels(static_cast<int>(xpos),bs.height - static_cast<int>(ypos)-1,1,1,GL_RGBA,GL_FLOAT, pixel);
+			glReadPixels(static_cast<int>(xpos), bs.height - static_cast<int>(ypos) - 1, 1, 1, GL_RGBA, GL_FLOAT, pixel);
+			
 			if (pixel[3] > 0.0f) {
-				cout<<pixel[0]<<"  "<<pixel[1]<<endl;
 				double s = pixel[0] * image.GetWidth();
 				double t = pixel[1] * image.GetHeight();
-				cout<<s<<"  "<<t<<endl;
 				ult_s = s;
 				ult_t = t; 
+				hay_punto_previo = true;
 				
 				pinta(s, t);
 				texture.update(image);
-			}else{cout<<pixel[0]<<"  "<<pixel[1]<<endl;}
+			} else {
+				// Si hizo clic en el fondo blanco (fuera del modelo), aún no hay punto inicial válido
+				hay_punto_previo = false;
+			}
 			
 		} else {
-			if (mouse_action==MouseAction::ManipulateView)
+			if (mouse_action == MouseAction::ManipulateView)
 				common_callbacks::mouseButtonCallback(window, GLFW_MOUSE_BUTTON_LEFT, action, mods);
 			mouse_action = MouseAction::None;
+			hay_punto_previo = false;
 		}
-		
-		
-		/// @ToDo: Parte 2: pintar un punto de radio "radius" en la imagen
-		///                 "image" que se usa como textura
 	}
-
+	
 	void mainMouseMoveCallback(GLFWwindow* window, double xpos, double ypos) {
-		if (mouse_action!=MouseAction::Draw) {
-			if (mouse_action==MouseAction::ManipulateView)
-				common_callbacks::mouseMoveCallback(window,xpos,ypos);
+		if (mouse_action != MouseAction::Draw) {
+			if (mouse_action == MouseAction::ManipulateView)
+				common_callbacks::mouseMoveCallback(window, xpos, ypos);
 			return; 
 		}
+		
 		BufferSize bs = getBufferSize(window); 
 		drawBack(); 
 		float pixel[4];
-		glReadPixels(static_cast<int>(xpos),bs.height-static_cast<int>(ypos)-1,1,1,GL_RGBA,GL_FLOAT,pixel);
+		glReadPixels(static_cast<int>(xpos), bs.height - static_cast<int>(ypos) - 1, 1, 1, GL_RGBA, GL_FLOAT, pixel);
 		
 		if (pixel[3] > 0.0f) {
-			double s = pixel[0]*image.GetWidth();
-			double t = pixel[1]*image.GetHeight();
-			double dx = s -ult_s;
-			double dy = t -ult_t;
-			double distancia = std::sqrt(dx*dx + dy*dy);
-			int relleno = static_cast<int>(distancia) + 1; 
+			double s = pixel[0] * image.GetWidth();
+			double t = pixel[1] * image.GetHeight();
 			
-			for(int i = 1; i <= relleno; ++i) {
-				double fraccion = static_cast<double>(i)/relleno;
-				double s_paso = ult_s+dx * fraccion;
-				double t_paso = ult_t+dy * fraccion;
+			// Si veníamos desde afuera del modelo, empezamos un trazo nuevo sin unir con el punto viejo
+			if (!hay_punto_previo) {
+				ult_s = s;
+				ult_t = t;
+				hay_punto_previo = true;
+				pinta(s, t);
+				texture.update(image);
+				return;
+			}
+			
+			double dx = s - ult_s;
+			double dy = t - ult_t;
+			double distancia = std::sqrt(dx * dx + dy * dy);
+			
+			// Si la distancia salta de golpe (ej. más de 100 px), cruzamos una costura UV del modelo 3D:
+			// pintamos en el nuevo lugar pero no trazamos una raya cruzando toda la textura
+			if (distancia > 100.0) {
+				ult_s = s;
+				ult_t = t;
+				pinta(s, t);
+				texture.update(image);
+				return;
+			}
+			
+			// Mismo control de espaciado que en 2D para evitar repintar sobre el mismo píxel
+			double espaciado = std::max(1.0, radius * 0.4);
+			if (distancia < espaciado) return;
+			
+			int relleno = static_cast<int>(distancia / espaciado); 
+			
+			for (int i = 1; i <= relleno; ++i) {
+				double fraccion = static_cast<double>(i) / relleno;
+				double s_paso = ult_s + dx * fraccion;
+				double t_paso = ult_t + dy * fraccion;
 				pinta(s_paso, t_paso);
 			}
 			
 			ult_s = s;
 			ult_t = t;
 			texture.update(image);
+		} else {
+			// El mouse se salió del modelo 3D hacia el fondo: cortamos el trazo continuo
+			hay_punto_previo = false;
 		}
-		
-		/// @ToDo: Parte 2: pintar un segmento de ancho "2*radius" en la imagen
-		///                 "image" que se usa como textura
-		
 	}
 
 	
